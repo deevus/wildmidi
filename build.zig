@@ -4,10 +4,38 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "wildmidi",
+    const dep_case = b.dependency("case", .{});
+    const mod_case = dep_case.module("case");
+
+    const dep_cli = b.dependency("cli", .{});
+    const mod_cli = dep_cli.module("zig-cli");
+
+    const codegen_exe = b.addExecutable(.{
+        .name = "codegen",
+        .root_source_file = b.path("codegen/gen-zig-api.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    codegen_exe.root_module.addImport("case", mod_case);
+    codegen_exe.root_module.addImport("cli", mod_cli);
+
+    const codegen_step = b.step("codegen", "Run codegen");
+    codegen_step.dependOn(&codegen_exe.step);
+
+    const codegen_run = b.addRunArtifact(codegen_exe);
+    codegen_step.dependOn(&codegen_run.step);
+    codegen_run.addArg("--outpath");
+    const codegen_output_file = codegen_run.addOutputFileArg("wildmidi.zig");
+
+    const mod_root = b.addModule("wildmidi", .{
+        .root_source_file = codegen_output_file,
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const lib = b.addStaticLibrary(.{
+        .name = "wildmidi",
+        .root_module = mod_root,
     });
 
     lib.linkLibC();
@@ -91,8 +119,6 @@ pub fn build(b: *std.Build) void {
     }
 
     b.installArtifact(lib);
-
-    _ = b.addModule("wildmidi", .{ .root_source_file = b.path("src/root.zig") });
 }
 
 fn getVersionFromZon() []const u8 {
