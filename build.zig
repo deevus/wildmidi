@@ -37,11 +37,7 @@ pub fn build(b: *std.Build) void {
     };
 
     const defaultFlags = .{
-        "-Wall",
-        "-W",
-        "-fno-common",
         "-DWILDMIDI_BUILD",
-        "-g",
     };
 
     const config_header = b.addConfigHeader(
@@ -93,6 +89,8 @@ pub fn build(b: *std.Build) void {
             });
         },
     }
+
+    lib.installHeadersDirectory(b.path("include"), "", .{});
 
     b.installArtifact(lib);
 
