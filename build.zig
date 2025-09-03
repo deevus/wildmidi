@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
         },
         .{
             .WILDMIDI_CFG = b.pathFromRoot("cfg/wildmidi.cfg"),
-            .WILDMIDI_VERSION = getVersionFromZon(),
+            .WILDMIDI_VERSION = "0.4.6",
             .HAVE_C_INLINE = 1,
             .HAVE_C___INLINE = 1,
             .HAVE_C___INLINE__ = 1,
@@ -111,18 +111,4 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
-}
-
-fn getVersionFromZon() []const u8 {
-    const build_zig_zon = @embedFile("build.zig.zon");
-    var buffer: [10 * build_zig_zon.len]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const version = std.zon.parse.fromSlice(
-        struct { version: []const u8 },
-        fba.allocator(),
-        build_zig_zon,
-        null,
-        .{ .ignore_unknown_fields = true },
-    ) catch @panic("Invalid build.zig.zon!");
-    return version.version;
 }
