@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
 
     lib_mod.addIncludePath(b.path("include"));
 
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "wildmidi",
         .root_module = lib_mod,
     });
@@ -94,12 +94,14 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(lib);
 
-    _ = b.addModule("wildmidi", .{ .root_source_file = b.path("src/root.zig") });
-
-    const tests = b.addTest(.{
+    const mod = b.addModule("wildmidi", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const tests = b.addTest(.{
+        .root_module = mod,
     });
 
     tests.linkLibrary(lib);
