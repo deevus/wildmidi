@@ -2,6 +2,12 @@ ADD_EXECUTABLE(test_seek test_seek.c)
 TARGET_LINK_LIBRARIES(test_seek libwildmidi-static ${M_LIBRARY})
 ADD_TEST(NAME seek COMMAND test_seek)
 
+ADD_EXECUTABLE(test_patch_failure test_patch_failure.c)
+TARGET_LINK_LIBRARIES(test_patch_failure libwildmidi-static ${M_LIBRARY})
+FOREACH (scenario missing repeated implicit drum healthy cleanup corrupt long_name reset drum_off reset_state)
+    ADD_TEST(NAME patch_failure_${scenario} COMMAND test_patch_failure ${scenario})
+ENDFOREACH ()
+
 ADD_EXECUTABLE(test_tokenize test_tokenize.c)
 TARGET_LINK_LIBRARIES(test_tokenize libwildmidi-static ${M_LIBRARY})
 ADD_TEST(NAME tokenize COMMAND test_tokenize)

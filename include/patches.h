@@ -33,9 +33,15 @@ struct _env {
 struct _sample;
 struct _mdi;
 
+enum _patch_load_state {
+    PATCH_UNLOADED,
+    PATCH_READY,
+    PATCH_FAILED
+};
+
 struct _patch {
     uint16_t patchid;
-    uint8_t loaded;
+    enum _patch_load_state load_state;
     char *filename;
     int16_t amp;
     uint8_t keep;

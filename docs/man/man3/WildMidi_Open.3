@@ -15,6 +15,8 @@ Open a MIDI type file pointed to by \fImidifile\fP for processing. This file mus
 .SH "RETURN VALUE"
 Returns NULL on error and sends a message to stderr, otherwise returns a handle for the midi file opened. This handle is used by most functions in libWildMidi to identify which midi file we are referring to.
 .PP
+If a selected instrument patch cannot load, opening fails, including when an earlier open cached that patch failure. WildMidi_GetError() identifies the failed patch. Clearing the error does not clear the patch cache; shut down and initialize again to retry after repairing a patch.
+.PP
 .SH SEE ALSO
 .BR WildMidi_GetVersion (3) ,
 .BR WildMidi_Init (3) ,
