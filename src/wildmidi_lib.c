@@ -71,6 +71,13 @@
  */
 
 static int WM_Initialized = 0;
+#ifdef WILDMIDI_TESTING
+/* One-shot fault injection, excluded from production builds. */
+static int test_fail_config_dir_alloc = 0;
+WM_SYMBOL void WildMidi_TestFailConfigDirAlloc(void) {
+    test_fail_config_dir_alloc = 1;
+}
+#endif
 uint16_t _WM_MixerOptions = 0;
 
 uint16_t _WM_SampleRate;
@@ -449,11 +456,18 @@ static int load_config(const char *config_file, const char *conf_dir) {
     } else {
         dir_end = FIND_LAST_DIRSEP(config_file);
         if (dir_end) {
+#ifdef WILDMIDI_TESTING
+            if (test_fail_config_dir_alloc) {
+                test_fail_config_dir_alloc = 0;
+                config_dir = NULL;
+                errno = ENOMEM;
+            } else
+#endif
             config_dir = (char *) malloc((dir_end - config_file + 2));
             if (config_dir == NULL) {
                 _WM_GLOBAL_ERROR(WM_ERR_MEM, NULL, errno);
                 WM_FreePatches();
-                free(config_buffer);
+                _WM_FreeBufferFile(config_buffer);
                 return (-1);
             }
             strncpy(config_dir, config_file, (dir_end - config_file + 1));

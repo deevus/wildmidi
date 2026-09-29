@@ -1,3 +1,11 @@
+# Compile an instrumented copy of this translation unit only for the test.
+# The remaining library objects come from the unmodified production archive.
+ADD_EXECUTABLE(test_vio_ownership test_vio_ownership.c
+    ${PROJECT_SOURCE_DIR}/src/wildmidi_lib.c)
+TARGET_COMPILE_DEFINITIONS(test_vio_ownership PRIVATE WILDMIDI_BUILD WILDMIDI_TESTING)
+TARGET_LINK_LIBRARIES(test_vio_ownership libwildmidi-static ${M_LIBRARY})
+ADD_TEST(NAME vio_ownership COMMAND test_vio_ownership)
+
 ADD_EXECUTABLE(test_seek test_seek.c)
 TARGET_LINK_LIBRARIES(test_seek libwildmidi-static ${M_LIBRARY})
 ADD_TEST(NAME seek COMMAND test_seek)
