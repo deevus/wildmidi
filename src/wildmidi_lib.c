@@ -2073,12 +2073,8 @@ WM_SYMBOL int WildMidi_FastSeek(midi * handle, unsigned long int *sample_pos) {
         *sample_pos = mdi->extra_info.approx_total_samples;
     }
 
-    /* was end of song requested and are we are there? */
-    if (*sample_pos == mdi->extra_info.approx_total_samples) {
-        /* yes */
-        _WM_Unlock(&mdi->lock);
-        return (0);
-    }
+    /* Seeking to the approximate end must still move the handle and reset
+     * voices/reverb, just like any other seek. */
 
     /* did we want to fast forward? */
     if (mdi->extra_info.current_sample > *sample_pos) {
