@@ -1687,8 +1687,15 @@ static int midi_setup_noteon(struct _mdi *mdi, uint8_t channel,
     mdi->events[mdi->event_count].samples_to_next = 0;
     mdi->event_count++;
 
-    if (mdi->channel[channel].isdrum)
-        _WM_load_patch(mdi, ((mdi->channel[channel].bank << 8) | (note | 0x80)));
+    if (!mdi->sf2_synth && !mdi->mafm_synth) {
+        if (mdi->channel[channel].isdrum) {
+            _WM_load_patch(mdi, ((mdi->channel[channel].bank << 8) | (note | 0x80)));
+        } else if (mdi->channel[channel].patch) {
+            /* Use the resolved patch that playback will use, including the
+             * implicit default and bank/nearest-program fallbacks. */
+            _WM_load_patch(mdi, mdi->channel[channel].patch->patchid);
+        }
+    }
     return (0);
 }
 
@@ -1828,7 +1835,8 @@ static int midi_setup_patch(struct _mdi *mdi, uint8_t channel, uint8_t patch) {
     if (mdi->channel[channel].isdrum) {
         mdi->channel[channel].bank = patch;
     } else {
-        _WM_load_patch(mdi, ((mdi->channel[channel].bank << 8) | patch));
+        if (!mdi->sf2_synth && !mdi->mafm_synth)
+            _WM_load_patch(mdi, ((mdi->channel[channel].bank << 8) | patch));
         mdi->channel[channel].patch = _WM_get_patch_data(mdi,
                                                      ((mdi->channel[channel].bank << 8) | patch));
     }
@@ -1871,11 +1879,7 @@ static int midi_setup_sysex_roland_drum_track(struct _mdi *mdi,
     mdi->events[mdi->event_count].samples_to_next = 0;
     mdi->event_count++;
 
-    if (setting > 0) {
-        mdi->channel[channel].isdrum = 1;
-    } else {
-        mdi->channel[channel].isdrum = 0;
-    }
+    _WM_do_sysex_roland_drum_track(mdi, &mdi->events[mdi->event_count - 1].event_data);
     return (0);
 }
 
@@ -1883,6 +1887,7 @@ static int midi_setup_sysex_gm_reset(struct _mdi *mdi) {
     MIDI_EVENT_DEBUG(_WM_FUNCTION,0,0);
 
     if (_WM_CheckEventMemoryPool(mdi) < 0) return (-1);
+    _WM_do_sysex_gm_reset(mdi, NULL);
     mdi->events[mdi->event_count].evtype = ev_sysex_roland_reset;
     mdi->events[mdi->event_count].do_event = _WM_do_sysex_roland_reset;
     mdi->events[mdi->event_count].event_data.channel = 0;
@@ -1895,6 +1900,7 @@ static int midi_setup_sysex_gm_reset(struct _mdi *mdi) {
 static int midi_setup_sysex_roland_reset(struct _mdi *mdi) {
     MIDI_EVENT_DEBUG(_WM_FUNCTION,0,0);
     if (_WM_CheckEventMemoryPool(mdi) < 0) return (-1);
+    _WM_do_sysex_gm_reset(mdi, NULL);
     mdi->events[mdi->event_count].evtype = ev_sysex_roland_reset;
     mdi->events[mdi->event_count].do_event = _WM_do_sysex_roland_reset;
     mdi->events[mdi->event_count].event_data.channel = 0;
@@ -1907,6 +1913,7 @@ static int midi_setup_sysex_roland_reset(struct _mdi *mdi) {
 static int midi_setup_sysex_yamaha_reset(struct _mdi *mdi) {
     MIDI_EVENT_DEBUG(_WM_FUNCTION,0,0);
     if (_WM_CheckEventMemoryPool(mdi) < 0) return (-1);
+    _WM_do_sysex_gm_reset(mdi, NULL);
     mdi->events[mdi->event_count].evtype = ev_sysex_roland_reset;
     mdi->events[mdi->event_count].do_event = _WM_do_sysex_roland_reset;
     mdi->events[mdi->event_count].event_data.channel = 0;
@@ -2128,8 +2135,6 @@ _WM_initMDI(void) {
     mdi->extra_info.copyright = NULL;
     mdi->extra_info.mixer_options = _WM_MixerOptions;
 
-    _WM_load_patch(mdi, 0x0000);
-
     mdi->events_size = MEM_CHUNK;
     mdi->events = (struct _event *) malloc(mdi->events_size * sizeof(struct _event));
     mdi->event_count = 0;
@@ -2182,7 +2187,7 @@ void _WM_freeMDI(struct _mdi *mdi) {
                     free(mdi->patches[i]->first_sample);
                     mdi->patches[i]->first_sample = tmp_sample;
                 }
-                mdi->patches[i]->loaded = 0;
+                mdi->patches[i]->load_state = PATCH_UNLOADED;
             }
         }
         _WM_Unlock(&_WM_patch_lock);

@@ -121,8 +121,8 @@ _WM_load_sample(struct _patch *sample_patch) {
     struct _sample *tmp_sample = NULL;
     uint32_t i = 0;
 
-    /* we only want to try loading the guspat once. */
-    sample_patch->loaded = 1;
+    /* Cache failed attempts too, but never present them as usable samples. */
+    sample_patch->load_state = PATCH_FAILED;
 
     if (sample_patch->filename == NULL) {
         /* Emergency-soundbank mode: no file, fabricate a sample. */
@@ -236,5 +236,6 @@ _WM_load_sample(struct _patch *sample_patch) {
 
         guspat = guspat->next;
     } while (guspat);
+    sample_patch->load_state = PATCH_READY;
     return (0);
 }

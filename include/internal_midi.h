@@ -174,6 +174,7 @@ struct _mdi {
 
     struct _patch **patches;
     uint32_t patch_count;
+    struct _patch *failed_patch; /* first required patch that could not load */
     int16_t amp;
 
     int32_t *mix_buffer;

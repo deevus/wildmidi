@@ -22,6 +22,8 @@ This is the size of the midi file in bytes that is stored in memory.
 .SH "RETURN VALUE"
 Returns NULL on error, otherwise returns a handle for the midi buffer opened.
 .PP
+If a selected instrument patch cannot load, opening fails, including when an earlier open cached that patch failure. WildMidi_GetError() identifies the failed patch. Clearing the error does not clear the patch cache; shut down and initialize again to retry after repairing a patch.
+.PP
 .SH SEE ALSO
 .BR WildMidi_GetVersion (3) ,
 .BR WildMidi_Init (3) ,

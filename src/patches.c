@@ -117,14 +117,12 @@ void _WM_load_patch(struct _mdi *mdi, uint16_t patchid) {
     }
 
     _WM_Lock(&_WM_patch_lock);
-    if (!tmp_patch->loaded) {
-        if (_WM_load_sample(tmp_patch) == -1) {
-            _WM_Unlock(&_WM_patch_lock);
-            return;
-        }
+    if (tmp_patch->load_state == PATCH_UNLOADED) {
+        _WM_load_sample(tmp_patch);
     }
 
-    if (tmp_patch->first_sample == NULL) {
+    if (tmp_patch->load_state == PATCH_FAILED) {
+        if (mdi->failed_patch == NULL) mdi->failed_patch = tmp_patch;
         _WM_Unlock(&_WM_patch_lock);
         return;
     }
@@ -134,6 +132,7 @@ void _WM_load_patch(struct _mdi *mdi, uint16_t patchid) {
                                           sizeof(struct _patch *) * (mdi->patch_count + 1));
         if (new_patches == NULL) {
             _WM_GLOBAL_ERROR(WM_ERR_MEM, NULL, errno);
+            if (mdi->failed_patch == NULL) mdi->failed_patch = tmp_patch;
             _WM_Unlock(&_WM_patch_lock);
             return;
         }
