@@ -127,16 +127,46 @@ pub fn build(b: *std.Build) void {
     wm_error_tc.addIncludePath(b.path("include"));
     mod.addImport("wm_error", wm_error_tc.createModule());
 
+    // The fault-injection seam is present only in the test library, never in
+    // the module installed by consumers.
+    const test_lib_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    test_lib_mod.addIncludePath(b.path("include"));
+    test_lib_mod.addConfigHeader(config_header);
+    const testFlags = .{ "-DWILDMIDI_BUILD", "-DWILDMIDI_TESTING" };
+    switch (target.result.os.tag) {
+        .windows => {
+            test_lib_mod.addCSourceFiles(.{ .files = &source_files, .flags = &(.{"-DWILDMIDI_STATIC"} ++ testFlags) });
+            test_lib_mod.addIncludePath(b.path("mingw"));
+        },
+        .macos => {
+            test_lib_mod.addCSourceFiles(.{ .files = &source_files, .flags = &testFlags });
+            test_lib_mod.addIncludePath(b.path("macosx"));
+        },
+        else => test_lib_mod.addCSourceFiles(.{ .files = &source_files, .flags = &testFlags }),
+    }
+    const test_lib = b.addLibrary(.{ .name = "wildmidi_test", .root_module = test_lib_mod });
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_mod.linkLibrary(test_lib);
+    test_mod.addImport("wm_error", wm_error_tc.createModule());
     const tests = b.addTest(.{
-        .root_module = mod,
+        .root_module = test_mod,
         .use_llvm = true,
     });
 
-    const freepats = b.dependency("freepats", .{});
-
     const run_lib_unit_tests = b.addRunArtifact(tests);
-    const freepats_root = freepats.builder.build_root.path orelse @panic("freepats build_root path is null");
-    run_lib_unit_tests.setEnvironmentVariable("FREEPATS_PATH", freepats_root);
+    const with_test_bank = b.option(bool, "test-with-freepats", "Run integration tests with the pinned FreePats bank") orelse false;
+    if (with_test_bank) {
+        const freepats = b.lazyDependency("freepats", .{}) orelse return;
+        run_lib_unit_tests.setEnvironmentVariable("FREEPATS_PATH", freepats.builder.build_root.path.?);
+    }
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);

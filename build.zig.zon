@@ -7,6 +7,7 @@
         .freepats = .{
             .url = "git+https://github.com/feross/freepats#79cd6f0076ff6c9bbc692bf29b6a4574fe4cc725",
             .hash = "N-V-__8AAFm4_AGuVIM54Yx5j8FcXVlpgcgtzRHyh0oC2VTn",
+            .lazy = true,
         },
     },
     .paths = .{

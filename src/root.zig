@@ -50,11 +50,23 @@ fn handleGlobalError() WildMidiError!void {
     try handleError(_WM_Global_ErrorI);
 }
 
-pub fn init(config_file: [:0]const u8, rate: u16, options: InitOptions) !void {
-    return try handleError(WildMidi_Init(config_file, rate, @intFromEnum(options)));
+pub fn init(config_file: [:0]const u8, rate: u16, options: InitOptions) WildMidiError!void {
+    WildMidi_ClearError();
+    return handleError(WildMidi_Init(config_file, rate, @intFromEnum(options)));
+}
+
+pub const Vio = extern struct {
+    allocate_file: ?*const fn ([*:0]const u8, *u32) callconv(.c) ?*anyopaque,
+    free_file: ?*const fn (?*anyopaque) callconv(.c) void,
+};
+
+pub fn initVio(vio: *Vio, config_file: [:0]const u8, rate: u16, options: InitOptions) WildMidiError!void {
+    WildMidi_ClearError();
+    return handleError(WildMidi_InitVIO(vio, config_file, rate, @intFromEnum(options)));
 }
 
 pub fn shutdown() WildMidiError!void {
+    WildMidi_ClearError();
     return handleError(WildMidi_Shutdown());
 }
 
@@ -66,16 +78,17 @@ pub const MidiFile = struct {
     handle: ?*anyopaque,
 
     pub fn open(midi_file: [:0]const u8) WildMidiError!MidiFile {
+        WildMidi_ClearError();
         const handle = WildMidi_Open(midi_file);
-
-        try handleGlobalError();
-
-        return MidiFile{
-            .handle = handle,
-        };
+        if (handle == null) {
+            try handleGlobalError();
+            return error.UnableToOpen;
+        }
+        return .{ .handle = handle };
     }
 
     pub fn getOutput(self: MidiFile, buffer: []u8) WildMidiError!usize {
+        WildMidi_ClearError();
         const written = WildMidi_GetOutput(self.handle, @ptrCast(buffer.ptr), @intCast(buffer.len));
         if (written < 0) {
             try handleGlobalError();
@@ -85,38 +98,51 @@ pub const MidiFile = struct {
     }
 
     pub fn getInfo(self: MidiFile) !?*WildMidiInfo {
+        WildMidi_ClearError();
         const info = WildMidi_GetInfo(self.handle);
-
-        try handleGlobalError();
-
+        if (info == null) {
+            try handleGlobalError();
+            return error.UnableToOpen;
+        }
         return info;
     }
 
-    pub fn setOption(self: MidiFile, options: u16, setting: u16) !void {
-        return try handleError(WildMidi_SetOption(self.handle, options, setting));
+    pub fn setOption(self: MidiFile, options: u16, setting: u16) WildMidiError!void {
+        WildMidi_ClearError();
+        return handleError(WildMidi_SetOption(self.handle, options, setting));
+    }
+
+    pub fn seekFrames(self: MidiFile, requested: u64) WildMidiError!u64 {
+        if (requested > std.math.maxInt(c_ulong)) return error.InvalidArgument;
+        var reached: c_ulong = @intCast(requested);
+        WildMidi_ClearError();
+        try handleError(WildMidi_FastSeek(self.handle, &reached));
+        return @intCast(reached);
     }
 
     pub fn close(self: MidiFile) void {
+        WildMidi_ClearError();
         _ = WildMidi_Close(self.handle);
     }
 };
 
 pub fn openBuffer(midi_buffer: [*c]const u8, size: c_uint) WildMidiError!MidiFile {
+    WildMidi_ClearError();
     const handle = WildMidi_OpenBuffer(midi_buffer, size);
-
-    try handleGlobalError();
-
-    return MidiFile{
-        .handle = handle,
-    };
+    if (handle == null) {
+        try handleGlobalError();
+        return error.UnableToOpen;
+    }
+    return .{ .handle = handle };
 }
 
 pub fn getError() [*c]u8 {
     return WildMidi_GetError();
 }
 
-pub fn masterVolume(master_volume: u8) !void {
-    return try handleError(WildMidi_MasterVolume(master_volume));
+pub fn masterVolume(master_volume: u8) WildMidiError!void {
+    WildMidi_ClearError();
+    return handleError(WildMidi_MasterVolume(master_volume));
 }
 
 pub const InitOptions = enum(u16) {
@@ -140,6 +166,9 @@ pub const WildMidiInfo = extern struct {
 };
 
 extern fn WildMidi_Init(config_file: [*c]const u8, rate: u16, options: u16) c_int;
+extern fn WildMidi_InitVIO(vio: *Vio, config_file: [*:0]const u8, rate: u16, options: u16) c_int;
+extern fn WildMidi_FastSeek(handle: ?*anyopaque, position: *c_ulong) c_int;
+extern fn WildMidi_ClearError() void;
 extern fn WildMidi_GetVersion() c_long;
 extern fn WildMidi_Open(midi_file: [*c]const u8) ?*anyopaque;
 extern fn WildMidi_OpenBuffer(midi_buffer: [*c]const u8, size: c_uint) ?*anyopaque;
@@ -207,6 +236,19 @@ test "openBuffer before init returns LibraryNotInitialized" {
     try testing.expectError(error.LibraryNotInitialized, openBuffer(&buffer, buffer.len));
 }
 
+test "VIO validates callbacks before init" {
+    var vio: Vio = .{ .allocate_file = null, .free_file = null };
+    try testing.expectError(error.InvalidArgument, initVio(&vio, "unused.cfg", 44100, .default));
+}
+
+test "seek before init reports the current operation" {
+    const mf: MidiFile = .{ .handle = null };
+    try testing.expectError(error.LibraryNotInitialized, mf.seekFrames(0));
+    if (comptime @sizeOf(c_ulong) < @sizeOf(u64)) {
+        try testing.expectError(error.InvalidArgument, mf.seekFrames(std.math.maxInt(u64)));
+    }
+}
+
 test "integration: renders test.mid end to end" {
     const config = try freepatsConfig(testing.allocator);
     defer testing.allocator.free(config);
@@ -249,6 +291,94 @@ test "integration: open missing file returns UnableToStat" {
     defer shutdown() catch {};
 
     try testing.expectError(error.UnableToStat, MidiFile.open("does/not/exist.mid"));
+}
+
+test "integration: failure recovery, seek boundaries, and playback rewind" {
+    const config = try freepatsConfig(testing.allocator);
+    defer testing.allocator.free(config);
+    try init(config, 44100, .default);
+    defer shutdown() catch {};
+
+    try testing.expectError(error.UnableToStat, MidiFile.open("does/not/exist.mid"));
+    try testing.expectError(error.InvalidArgument, masterVolume(200));
+    var size: u32 = 0;
+    const bytes = _WM_BufferFileImpl("test/test.mid", &size) orelse return error.UnableToRead;
+    defer _WM_FreeBufferFileImpl(bytes);
+    const midi_file = try openBuffer(@ptrCast(bytes), size);
+    defer midi_file.close();
+    const info = (try midi_file.getInfo()).?;
+    const end: u64 = info.approx_total_samples;
+    try testing.expect(end > 4096);
+    const halfway = try midi_file.seekFrames(end / 2);
+    try testing.expectEqual(end / 2, halfway);
+    try testing.expectEqual(halfway, @as(u64, (try midi_file.getInfo()).?.current_sample));
+    try testing.expectEqual(@as(u64, 0), try midi_file.seekFrames(0));
+    var buffer: [4096]u8 = undefined;
+    try testing.expect(try midi_file.getOutput(&buffer) > 0);
+    try testing.expectEqual(end, try midi_file.seekFrames(end));
+    try testing.expectEqual(end, @as(u64, (try midi_file.getInfo()).?.current_sample));
+    try testing.expectEqual(end, try midi_file.seekFrames(end + 1234));
+    try testing.expectEqual(end, @as(u64, (try midi_file.getInfo()).?.current_sample));
+    try testing.expectEqual(@as(u64, 0), try midi_file.seekFrames(0));
+    try testing.expect(try midi_file.getOutput(&buffer) > 0);
+}
+
+var vio_allocations: usize = 0;
+var vio_frees: usize = 0;
+var vio_config_bytes = [_]u8{ '\n', 0 }; // Includes writable trailing byte for load_config.
+
+extern fn WildMidi_TestFailConfigDirAlloc() void;
+
+fn testVioAllocate(name: [*:0]const u8, size: *u32) callconv(.c) ?*anyopaque {
+    if (std.mem.eql(u8, std.mem.span(name), "vio/missing.mid")) return null;
+    if (std.mem.eql(u8, std.mem.span(name), "vio/config.cfg")) {
+        size.* = 1;
+        vio_allocations += 1;
+        return @ptrCast(&vio_config_bytes);
+    }
+    const result = _WM_BufferFileImpl(name, size);
+    if (result != null) vio_allocations += 1;
+    return result;
+}
+
+fn testVioFree(ptr: ?*anyopaque) callconv(.c) void {
+    vio_frees += 1;
+    if (ptr == @as(?*anyopaque, @ptrCast(&vio_config_bytes))) return;
+    _WM_FreeBufferFileImpl(ptr);
+}
+
+extern fn _WM_BufferFileImpl([*:0]const u8, *u32) callconv(.c) ?*anyopaque;
+extern fn _WM_FreeBufferFileImpl(?*anyopaque) callconv(.c) void;
+
+test "VIO config directory allocation failure frees callback-owned buffer" {
+    vio_allocations = 0;
+    vio_frees = 0;
+    var vio: Vio = .{ .allocate_file = testVioAllocate, .free_file = testVioFree };
+    WildMidi_TestFailConfigDirAlloc();
+    try testing.expectError(error.UnableToAllocateMemory, initVio(&vio, "vio/config.cfg", 44100, .default));
+    try testing.expectEqual(@as(usize, 2), vio_allocations);
+    try testing.expectEqual(vio_allocations, vio_frees);
+    try initVio(&vio, "vio/config.cfg", 44100, .default);
+    try shutdown();
+    try testing.expectEqual(vio_allocations, vio_frees);
+}
+
+test "integration: VIO ownership and callback read failure" {
+    const config = try freepatsConfig(testing.allocator);
+    defer testing.allocator.free(config);
+    vio_allocations = 0;
+    vio_frees = 0;
+    var vio: Vio = .{ .allocate_file = testVioAllocate, .free_file = testVioFree };
+    try initVio(&vio, config, 44100, .default);
+    defer shutdown() catch {};
+
+    try testing.expectError(error.UnableToOpen, MidiFile.open("vio/missing.mid"));
+    const midi_file = try MidiFile.open("test/test.mid");
+    defer midi_file.close();
+    var buffer: [4096]u8 = undefined;
+    try testing.expect(try midi_file.getOutput(&buffer) > 0);
+    try testing.expect(vio_allocations > 0);
+    try testing.expectEqual(vio_allocations, vio_frees);
 }
 
 test "integration: setOption on a live handle succeeds" {
