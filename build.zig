@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// Build the C library, expose its Zig module, and register unit and FreePats tests.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -127,17 +128,61 @@ pub fn build(b: *std.Build) void {
     wm_error_tc.addIncludePath(b.path("include"));
     mod.addImport("wm_error", wm_error_tc.createModule());
 
+    const wm_file_io_tc = b.addTranslateC(.{
+        .root_source_file = b.path("include/file_io.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wm_file_io_tc.addIncludePath(b.path("include"));
+    mod.addImport("wm_file_io", wm_file_io_tc.createModule());
+
+    const wm_lib_tc = b.addTranslateC(.{
+        .root_source_file = b.path("include/wildmidi_lib.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (target.result.os.tag == .windows) wm_lib_tc.defineCMacro("WILDMIDI_STATIC", null);
+    mod.addImport("wm_lib", wm_lib_tc.createModule());
+
+    const test_lib_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    test_lib_mod.addIncludePath(b.path("include"));
+    test_lib_mod.addConfigHeader(config_header);
+    const testFlags = .{ "-DWILDMIDI_BUILD", "-DWILDMIDI_TESTING" };
+    switch (target.result.os.tag) {
+        .windows => {
+            test_lib_mod.addCSourceFiles(.{ .files = &source_files, .flags = &(.{"-DWILDMIDI_STATIC"} ++ testFlags) });
+            test_lib_mod.addIncludePath(b.path("mingw"));
+        },
+        .macos => {
+            test_lib_mod.addCSourceFiles(.{ .files = &source_files, .flags = &testFlags });
+            test_lib_mod.addIncludePath(b.path("macosx"));
+        },
+        else => test_lib_mod.addCSourceFiles(.{ .files = &source_files, .flags = &testFlags }),
+    }
+    const test_lib = b.addLibrary(.{ .name = "wildmidi_test", .root_module = test_lib_mod });
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_mod.linkLibrary(test_lib);
+    test_mod.addImport("wm_error", wm_error_tc.createModule());
+    test_mod.addImport("wm_file_io", wm_file_io_tc.createModule());
+    test_mod.addImport("wm_lib", wm_lib_tc.createModule());
     const tests = b.addTest(.{
-        .root_module = mod,
+        .root_module = test_mod,
         .use_llvm = true,
     });
 
     const freepats = b.dependency("freepats", .{});
-
     const run_lib_unit_tests = b.addRunArtifact(tests);
     const freepats_root = freepats.builder.build_root.path orelse @panic("freepats build_root path is null");
     run_lib_unit_tests.setEnvironmentVariable("FREEPATS_PATH", freepats_root);
 
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("test", "Run unit and integration tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 }

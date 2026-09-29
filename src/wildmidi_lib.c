@@ -71,6 +71,13 @@
  */
 
 static int WM_Initialized = 0;
+#ifdef WILDMIDI_TESTING
+/* One-shot fault injection, excluded from production builds. */
+static int test_fail_config_dir_alloc = 0;
+WM_SYMBOL void WildMidi_TestFailConfigDirAlloc(void) {
+    test_fail_config_dir_alloc = 1;
+}
+#endif
 uint16_t _WM_MixerOptions = 0;
 
 uint16_t _WM_SampleRate;
@@ -449,11 +456,18 @@ static int load_config(const char *config_file, const char *conf_dir) {
     } else {
         dir_end = FIND_LAST_DIRSEP(config_file);
         if (dir_end) {
+#ifdef WILDMIDI_TESTING
+            if (test_fail_config_dir_alloc) {
+                test_fail_config_dir_alloc = 0;
+                config_dir = NULL;
+                errno = ENOMEM;
+            } else
+#endif
             config_dir = (char *) malloc((dir_end - config_file + 2));
             if (config_dir == NULL) {
                 _WM_GLOBAL_ERROR(WM_ERR_MEM, NULL, errno);
                 WM_FreePatches();
-                free(config_buffer);
+                _WM_FreeBufferFile(config_buffer);
                 return (-1);
             }
             strncpy(config_dir, config_file, (dir_end - config_file + 1));
@@ -697,7 +711,7 @@ static int load_config(const char *config_file, const char *conf_dir) {
                             tmp_patch->note = 0;
                             tmp_patch->next = NULL;
                             tmp_patch->first_sample = NULL;
-                            tmp_patch->loaded = 0;
+                            tmp_patch->load_state = PATCH_UNLOADED;
                             tmp_patch->inuse_count = 0;
                         } else {
                             tmp_patch = _WM_patch[(patchid & 0x7F)];
@@ -729,7 +743,7 @@ static int load_config(const char *config_file, const char *conf_dir) {
                                         tmp_patch->note = 0;
                                         tmp_patch->next = NULL;
                                         tmp_patch->first_sample = NULL;
-                                        tmp_patch->loaded = 0;
+                                        tmp_patch->load_state = PATCH_UNLOADED;
                                         tmp_patch->inuse_count = 0;
                                     } else {
                                         tmp_patch = tmp_patch->next;
@@ -755,7 +769,7 @@ static int load_config(const char *config_file, const char *conf_dir) {
                                     tmp_patch->note = 0;
                                     tmp_patch->next = NULL;
                                     tmp_patch->first_sample = NULL;
-                                    tmp_patch->loaded = 0;
+                                    tmp_patch->load_state = PATCH_UNLOADED;
                                     tmp_patch->inuse_count = 0;
                                 }
                             }
@@ -1976,6 +1990,21 @@ static midi *parse_midi_buffer(const uint8_t *mididata, uint32_t midisize) {
         ret = (void *) _WM_ParseNewMidi(mididata, midisize);
     }
 
+    if (ret) {
+        struct _mdi *mdi = (struct _mdi *) ret;
+        /* SF2 and custom SMAF voices render without the GUS sample cache.
+         * SMAF attaches its synth only after parsing the converted MIDI. */
+        if (mdi->failed_patch && !mdi->sf2_synth && !mdi->mafm_synth) {
+            const char *name = mdi->failed_patch->filename;
+            char patch_name[128];
+            /* Leave room for the fixed-size native diagnostic's prefix. */
+            snprintf(patch_name, sizeof(patch_name), "%s",
+                     name ? name : "(built-in patch)");
+            _WM_GLOBAL_ERROR(WM_ERR_LOAD, patch_name, 0);
+            _WM_freeMDI(mdi);
+            ret = NULL;
+        }
+    }
     return (ret);
 }
 
@@ -2073,12 +2102,8 @@ WM_SYMBOL int WildMidi_FastSeek(midi * handle, unsigned long int *sample_pos) {
         *sample_pos = mdi->extra_info.approx_total_samples;
     }
 
-    /* was end of song requested and are we are there? */
-    if (*sample_pos == mdi->extra_info.approx_total_samples) {
-        /* yes */
-        _WM_Unlock(&mdi->lock);
-        return (0);
-    }
+    /* Seeking to the approximate end must still move the handle and reset
+     * voices/reverb, just like any other seek. */
 
     /* did we want to fast forward? */
     if (mdi->extra_info.current_sample > *sample_pos) {

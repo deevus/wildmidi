@@ -12,6 +12,78 @@ Version: 0.5.0
 Licenses: GPLv3+ and LGPLv3
 Website: https://github.com/Mindwerks/wildmidi
 
+ZIG MODULE (Zig 0.16):
+
+Initialization returns a `WildMidi` value for WildMIDI's one global library instance.
+The VIO form reads the config and instrument files through `std.Io`:
+
+```zig
+const std = @import("std");
+const wm = @import("wildmidi");
+
+pub fn main(init: std.process.Init) !void {
+    const wildmidi = try wm.WildMidi.initVio(init.io, init.gpa, .{
+        .config_file = "cfg/wildmidi.cfg",
+        .sample_rate = 44100,
+    });
+    defer wildmidi.deinit();
+
+    const file = try std.Io.Dir.cwd().openFile(init.io, "test/test.mid", .{});
+    defer file.close(init.io);
+    const midi = try wildmidi.open(init.io, init.gpa, file);
+    defer midi.close();
+
+    try midi.setOptions(.{ .reverb = true, .loop = false });
+    const info = try midi.getInfo();
+    _ = info.approx_total_samples;
+
+    const pcm = midi.getOutputAlloc(init.gpa, 4096) catch |err| switch (err) {
+        error.EndOfStream => return,
+        else => return err,
+    };
+    defer init.gpa.free(pcm);
+    // Consume pcm (16-bit stereo PCM, host-endian).
+}
+```
+
+`wildmidi.open` reads from the file's current position and does not take ownership
+of its handle. Close the MIDI handle before deinitializing WildMIDI. Keep the supplied I/O,
+allocator, and optional directory open until shutdown. The C library
+is still a singleton; a second initialization returns
+`error.LibraryAlreadyInitialized`. For ordinary C-managed file paths, use
+`wm.WildMidi.init(.{ .config_file = "cfg/wildmidi.cfg" })` instead. Use the existing
+non-allocating `midi.getOutput(buffer)` in real-time audio callbacks;
+`getOutputAlloc` allocates one chunk, not the entire song. Both rendering methods
+return `error.EndOfStream` when a positive-capacity request produces no audio.
+The last partial chunk succeeds; zero-capacity requests do not advance playback.
+The caller frees the exact returned slice. If resizing that allocation fails after rendering,
+the method returns an allocation error but playback has already advanced; it
+does not rewind or return that chunk. A `WildMidi` value must come from a
+successful initializer. Do not copy it to create another owner.
+
+Opening fails with `error.UnableToLoad` if a selected instrument patch cannot
+load, rather than returning a handle with missing instruments. Failed patch loads
+remain cached until shutdown; repeated opens still fail even after clearing the
+error. After repairing an unavailable patch, shut down and initialize again.
+
+Initialization mixer options use named booleans, for example
+`.mixer_options = .{ .reverb = true, .enhanced_resampling = true }`.
+`MidiFile.setOptions` accepts nullable booleans: `null` leaves that flag
+unchanged, `true` enables it, and `false` disables it. An empty update is a
+no-op. `getInfo` returns a value snapshot with fixed-width numeric fields and
+named mixer options; its optional copyright slice borrows C storage only until
+the next `getInfo` call or `midi.close()` (copy it if it must live longer).
+
+Earlier Zig callers should replace `try wm.init(config, rate, options)` with
+`const wildmidi = try wm.WildMidi.init(.{ .config_file = config, .sample_rate = rate,
+.mixer_options = .{ .reverb = true } }); defer wildmidi.deinit();`. Replace raw
+`midi.setOption(mask, setting)` calls with `midi.setOptions(.{ .reverb = true })`.
+The root-level `openBuffer(pointer, size)` and `masterVolume(volume)` wrappers
+are removed; use `wildmidi.openBuffer(bytes)` and `wildmidi.masterVolume(volume)`.
+The old public VIO callback table is replaced by
+`WildMidi.initVio(io, allocator, options)`; the C callback interface is unchanged.
+`zig build test` always runs the pinned FreePats integration tests.
+
 PLATFORMS:
 
 * Linux: Arch, Debian, Fedora, Ubuntu, etc (player: ALSA, OSS,
